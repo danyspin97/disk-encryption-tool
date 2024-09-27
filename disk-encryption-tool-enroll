@@ -39,14 +39,6 @@ write_issue_file() {
 
 [ ! -e "/var/lib/YaST2/reconfig_system" ] || exit 0
 have_luks2 || exit 0
-crypt_keyid="$(keyctl id %user:cryptenroll 2> /dev/null)" || exit 0
-[ -n "$crypt_keyid" ] || {
-	echo "Recovery key not registered in the keyring. Aborting" > /dev/stderr
-	exit 1
-}
-
-write_issue_file
-
 # Proceed with the enrollment
 
 pw=
@@ -61,27 +53,42 @@ get_credential tpm2 "disk-encryption-tool-enroll.tpm2"
 fido2=
 get_credential fido2 "disk-encryption-tool-enroll.fido2"
 
-[ -z "$pw" ] || {
-	echo "Enrolling password"
-	# Note that if --no-reuse-initrd is used, then a new initrd
-	# will be created and will break the measurement of the
-	# initial components if later the TPM2 enrollment is called
-	extra=
-	if [ -z "$tpm2_pin" ] && [ -z "$tpm2" ] && [ -z "$fido2" ]; then
-		extra="--no-reuse-initrd"
-	fi
-	PW="$pw" sdbootutil enroll --method=password "$extra"
-}
-
 if [ -n "$tpm2_pin" ]; then
 	echo "Enrolling TPM2 with PIN"
 	SDB_ADD_INITIAL_COMPONENT=1 PIN="$crypt_tpm_pin" sdbootutil enroll --method=tpm2+pin
 elif [ -n "$tpm2" ]; then
 	echo "Enrolling TPM2"
-	SDB_ADD_INITIAL_COMPONENT=1 sdbootutil enroll --method=tpm2
+	SDB_ADD_INITIAL_COMPONENT=1 sdbootutil enroll --method=tpm2 --generate-pin
 fi
 
 [ -z "$fido2" ] || {
 	echo "Enrolling a FIDO2 key"
 	sdbootutil enroll --method=fido2
 }
+
+# Note that if --no-reuse-initrd is used, then a new initrd
+# will be created and will break the measurement of the
+# initial components if later the TPM2 enrollment is called
+extra=
+if [ -z "$tpm2_pin" ] && [ -z "$tpm2" ] && [ -z "$fido2" ]; then
+	extra="--no-reuse-initrd"
+fi
+if [ -n "$pw" ]; then
+	echo "Enrolling password"
+	PW="$pw" sdbootutil enroll --method=password "$extra"
+else
+	# enroll --method=tpm2 set %user:pin that will be reused here
+	sdbootutil enroll --method=recovery-key "$extra"
+fi
+
+# We need to wait until sdbootutil has been called
+# because the recovery key / PIN will be set there
+crypt_keyid="$(keyctl id %user:pin 2> /dev/null)" || exit 0
+if [ -n "$crypt_keyid" ]; then
+	crypt_keyid="$(keyctl id %user:cryptenroll 2> /dev/null)" || exit 0
+	if [ -n "$crypt_keyid" ]; then
+		echo "Recovery key not registered in the keyring. Aborting" > /dev/stderr
+		exit 1
+	fi
+fi
+write_issue_file

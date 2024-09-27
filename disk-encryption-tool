@@ -241,19 +241,12 @@ fi
 
 
 if [ -n "$gen_key" ]; then
-	read -r password < <(generate-recovery-key)
 	if [ -e /etc/initrd-release ]; then
-		# When multiple partitions are being encrypted we want
-		# to generete the key only once for the first one, and
-		# then reuse it if it already exists
-		key_id="$(keyctl id %user:cryptenroll 2> /dev/null)" || :
-		if [ -n "$crypt_keyid" ]; then
-			password="$(keyctl pipe "$key_id")"
-		else
-		        read -r key_id < <(echo -n "$password" | keyctl padd user cryptenroll @u)
-		fi
+		# Use a random password, as later a recovery key will be generated
+		password=$(dd if=/dev/urandom bs=8 count=1 | base64)
+		echo -n "$password" | keyctl padd user cryptenroll @u > /dev/null
+		keyctl timeout %user:cryptenroll 120
 	fi
-	echo -e "Recovery key: \e[1m$password\e[m"
 fi
 
 echo "Encrypting..."
